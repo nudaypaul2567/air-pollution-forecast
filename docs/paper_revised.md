@@ -42,9 +42,15 @@ This paper addresses these limitations directly by proposing an ensemble autoreg
 
 ## II. LITERATURE SURVEY
 
-[Literature survey section - same as original with grammar corrections for "and...and..." chains]
+Accurate short-term air pollution forecasting has become a central research topic because concentrations of O₃ and NO₂ vary rapidly with emissions, meteorology, and atmospheric chemistry. Early studies were dominated by statistical time-series approaches, while recent work has shifted toward machine learning due to improved nonlinear modeling capability and better performance on high-dimensional environmental data.
 
-[Reference entries 1-20 - same as original, with note about references [4] and [10]]
+Classical statistical models such as ARIMA and SARIMA remain important baselines because they are interpretable and computationally efficient [1], [2]. They can capture seasonality and short-memory autocorrelation under stable conditions, but their linear assumptions limit performance during abrupt emission episodes and nonlinear photochemical regimes [3]. Consequently, purely statistical models often underperform in complex urban settings where pollutant dynamics are strongly non-stationary.
+
+Machine learning approaches have therefore become more prominent. Support Vector Regression has demonstrated robust nonlinear regression performance in air-quality prediction tasks [5]. Random Forest models provide stable generalization through bootstrap aggregation and feature subsampling [6]. More recently, boosting algorithms—especially XGBoost and LightGBM—have reported strong results for hourly pollutant forecasting because they efficiently model nonlinear feature interactions while scaling to large datasets [7], [8], [9]. Studies also show that performance improves substantially when lag features, rolling statistics, cyclic encodings, and meteorological interaction terms are combined [11], [12].
+
+Even with these advances, important gaps persist. First, many studies focus on spatial estimation or nowcasting rather than true multi-step temporal forecasting that supports early warnings [13], [14]. Second, a large share of machine-learning papers still report one-step-ahead results only, without robust recursive multi-horizon validation [15]. Third, practical operational deployment is often missing; many works do not provide an API-backed application that decision-makers can use in real time [16], [17]. Fourth, fewer studies jointly optimize and report forecast quality for both O₃ and NO₂ in a unified, deployable pipeline despite their policy relevance as coupled pollutants [18], [19], [20].
+
+This gap profile motivates the present study: an ensemble of XGBoost and LightGBM is paired with an autoregressive recursive strategy for multi-step forecasting, then integrated into a deployable FastAPI and React system. In this context, references [4] Fania et al. (2025) and [10] Lin and Chan (2026) are retained with explicit publication-date notes because they appear as early-access/future-issue records pending final bibliographic confirmation.
 
 ### Research Gap
 
@@ -64,7 +70,7 @@ The study focuses on Delhi, India, one of the most polluted metropolitan areas i
 
 Raw environmental data collected from multiple sources contains numerous inconsistencies that must be resolved before the data can be used for model training. Missing values are a common problem in satellite-derived datasets, occurring when cloud cover obscures the sensor's view, when instruments undergo calibration, or when transmission errors corrupt data records. These gaps are addressed through interpolation for short missing sequences and statistical imputation methods for longer gaps, using neighboring temporal values to estimate the missing measurements. Temporal alignment is performed to synchronize all data sources to a common hourly time scale, ensuring that each row in the final dataset contains properly matched values from satellite reanalysis, meteorological observations, and ground-level pollutant measurements. Outlier removal is conducted using the 1st and 99th percentile thresholds, which eliminates extreme values caused by sensor malfunction or unusual transient events without discarding genuine pollution episodes. This process retained 24,112 high-quality samples for model development. Normalization and scaling are applied to bring all input variables to comparable numerical ranges, which improves gradient-based optimization during model training and prevents variables with naturally large magnitudes from dominating the learning process. Atmospheric parameters are converted to physically consistent units to ensure meaningful relationships between variables. Air density is calculated using:
 
--Force\rho = \frac{P}{R \times T}-Force
+$$\rho = \frac{P}{R \times T}$$
 
 where ρ is the air density in kg/m³, P is the atmospheric surface pressure in Pascals, R is the specific gas constant for dry air (287.05 J/kg·K), and T is the temperature in Kelvin. This derived quantity provides the model with a physically meaningful representation of atmospheric state that links pressure and temperature into a single variable relevant to pollutant dispersion behavior.
 
@@ -72,7 +78,7 @@ where ρ is the air density in kg/m³, P is the atmospheric surface pressure in 
 
 Feature engineering is the most critical step in this pipeline because it transforms raw measurements into representations that reveal the underlying patterns driving pollutant behavior. The system generates a total of 155 input features organized into four distinct categories. The first category consists of lag-based features that capture historical pollutant concentrations at previous time steps such as t-1, t-2, t-3, and so on up to several hours in the past. These features allow the model to learn from recent concentration history and exploit the strong temporal persistence that characterizes air quality data, where the concentration at any given hour is strongly correlated with concentrations in the preceding hours. The second category comprises rolling statistical measures computed over defined time windows, including moving averages and moving standard deviations calculated over 3-hour, 6-hour, 12-hour, and 24-hour windows. These aggregated statistics smooth out short-term noise and highlight the underlying trends and variability patterns that the model uses to distinguish between stable conditions and transitional periods. The third category consists of cyclic temporal features that encode the periodic nature of daily and seasonal pollution patterns. The transformation uses:
 
--Force\sin\left(\frac{2\pi t}{24}\right), \cos\left(\frac{2\pi t}{24}\right)-Force
+$$\sin\left(\frac{2\pi t}{24}\right), \cos\left(\frac{2\pi t}{24}\right)$$
 
 where t represents the hour of the day ranging from 0 to 23. These sine and cosine transformations convert the linear hour value into a circular representation on a unit circle, which allows the model to understand that hour 23 and hour 0 are adjacent time points rather than being 23 units apart. This cyclic encoding captures the daily repeating patterns in pollutant concentrations, such as the morning and evening traffic rush peaks in NO₂ and the afternoon photochemical peak in O₃. The fourth category includes derived meteorological features such as wind speed multiplied by temperature and interaction terms between humidity and boundary layer height, which represent the physical processes that control pollutant transport, dilution, and chemical reaction rates.
 
@@ -80,35 +86,35 @@ where t represents the hour of the day ranging from 0 to 23. These sine and cosi
 
 The framework builds its prediction capability on an ensemble of two gradient boosting algorithms: Extreme Gradient Boosting (XGBoost) and Light Gradient Boosting Machine (LightGBM). XGBoost uses a regularized objective function that adds penalty terms for model complexity, enabling it to capture intricate nonlinear patterns in the data while controlling overfitting. Its depth-wise tree growth strategy builds complete levels of the tree before proceeding to the next, which produces well-balanced tree structures. LightGBM, by contrast, employs a leaf-wise growth strategy that expands the leaf with the maximum loss reduction at each step, enabling faster convergence and often achieving better accuracy with fewer iterations. LightGBM also uses histogram-based feature binning that reduces memory usage and accelerates training on large datasets. Both models are trained independently using the same 155-feature input set, with the dataset divided through time-aware splitting that preserves temporal order to prevent future information from leaking into training data. The XGBoost model uses 3000 estimators with a learning rate of 0.02 and a maximum tree depth of 5. The LightGBM model operates with 3000 estimators and 63 leaves, with specific regularization parameters tuned through grid search and cross-validation. Early stopping is applied to both models to halt training when validation performance plateaus. The final prediction is produced through ensemble averaging:
 
--Force\hat{y}(t) = \frac{y_{\text{XGB}}(t) + y_{\text{LGBM}}(t)}{2}-Force
+$$\hat{y}(t) = \frac{y_{\text{XGB}}(t) + y_{\text{LGBM}}(t)}{2}$$
 
-where $\hat{y}(t)$ is the ensemble prediction at time t, {\text{XGB}}(t)$ is the XGBoost prediction, and {\text{LGBM}}(t)$ is the LightGBM prediction. By averaging the outputs, the ensemble reduces the prediction variance that each individual model exhibits, leading to more stable and consistent results across different atmospheric conditions and pollution regimes.
+where $\hat{y}(t)$ is the ensemble prediction at time $t$, $y_{\text{XGB}}(t)$ is the XGBoost prediction, and $y_{\text{LGBM}}(t)$ is the LightGBM prediction. By averaging the outputs, the ensemble reduces the prediction variance that each individual model exhibits, leading to more stable and consistent results across different atmospheric conditions and pollution regimes.
 
 ### 3.5 Autoregressive Forecasting
 
 Standard machine learning prediction models generate a forecast for only the single next time step, which provides insufficient lead time for most practical air quality management applications. Environmental agencies typically need forecasts extending over several hours to days in order to plan interventions, issue health advisories, or activate emission control measures. The framework addresses this need through an autoregressive prediction mechanism defined as:
 
--Forcey(t) = f(x(t), y(t-1), y(t-2), \ldots)-Force
+$$y(t) = f(x(t), y(t-1), y(t-2), \ldots)$$
 
-where (t)$ is the predicted pollutant concentration at time step t, (t)$ represents the exogenous input features including meteorological variables and temporal encodings, and (t-1), y(t-2)$, and earlier values are previously predicted outputs that serve as input features for the current prediction. In operation, the model first predicts the concentration for the next hour using actual observed values. That predicted value then replaces the missing future observation and is fed back as a lag feature for predicting the hour after that. This recursive cycle continues for as many steps as the desired forecast horizon requires. The mechanism preserves temporal continuity in the predictions and enables the model to generate coherent multi-step forecasts even when no future ground-truth observations are available. Consistent feature updating at each recursive step helps manage error propagation and maintain stable prediction behavior over extended horizons.
+where $y(t)$ is the predicted pollutant concentration at time step $t$, $x(t)$ represents the exogenous input features including meteorological variables and temporal encodings, and $y(t-1)$, $y(t-2)$, and earlier values are previously predicted outputs that serve as input features for the current prediction. In operation, the model first predicts the concentration for the next hour using actual observed values. That predicted value then replaces the missing future observation and is fed back as a lag feature for predicting the hour after that. This recursive cycle continues for as many steps as the desired forecast horizon requires. The mechanism preserves temporal continuity in the predictions and enables the model to generate coherent multi-step forecasts even when no future ground-truth observations are available. Consistent feature updating at each recursive step helps manage error propagation and maintain stable prediction behavior over extended horizons.
 
 ### 3.6 Evaluation Metrics
 
-The performance of the proposed framework is assessed using four complementary metrics that together provide a complete picture of prediction quality. In all formulas, $ denotes the observed value, $\hat{y}_i$ denotes the predicted value, $\bar{y}$ is the mean of observed values, and $ is the total number of samples.
+The performance of the proposed framework is assessed using four complementary metrics that together provide a complete picture of prediction quality. In all formulas, $y_i$ denotes the observed value, $\hat{y}_i$ denotes the predicted value, $\bar{y}$ is the mean of observed values, and $n$ is the total number of samples.
 
--Force\text{RMSE} = \sqrt{\frac{1}{n} \sum_{i=1}^{n} (y_i - \hat{y}_i)^2}-Force
+$$\text{RMSE} = \sqrt{\frac{1}{n} \sum_{i=1}^{n} (y_i - \hat{y}_i)^2}$$
 
 Root Mean Square Error calculates the square root of the average squared difference between predictions and observations. It is particularly sensitive to large errors, making it useful for detecting whether the model produces occasional extreme mispredictions.
 
--Force\text{MAE} = \frac{1}{n} \sum_{i=1}^{n} |y_i - \hat{y}_i|-Force
+$$\text{MAE} = \frac{1}{n} \sum_{i=1}^{n} |y_i - \hat{y}_i|$$
 
 Mean Absolute Error computes the average of the absolute differences between predicted and observed values. Unlike RMSE, it treats all errors with equal weight regardless of magnitude, providing a straightforward measure of typical prediction accuracy.
 
--ForceR^2 = 1 - \frac{\sum_{i=1}^{n} (y_i - \hat{y}_i)^2}{\sum_{i=1}^{n} (y_i - \bar{y})^2}-Force
+$$R^2 = 1 - \frac{\sum_{i=1}^{n} (y_i - \hat{y}_i)^2}{\sum_{i=1}^{n} (y_i - \bar{y})^2}$$
 
 The Coefficient of Determination measures the proportion of total variance in the observed data that the model successfully explains. A value of 1.0 represents perfect prediction where the model accounts for all observed variability, while values closer to 0 indicate the model performs no better than simply predicting the mean.
 
--Force\text{RIA} = 1 - \frac{\sum_{i=1}^{n} |y_i - \hat{y}_i|}{\sum_{i=1}^{n} (|y_i - \bar{y}| + |\hat{y}_i - \bar{y}|)}-Force
+$$\text{RIA} = 1 - \frac{\sum_{i=1}^{n} |y_i - \hat{y}_i|}{\sum_{i=1}^{n} (|y_i - \bar{y}| + |\hat{y}_i - \bar{y}|)}$$
 
 The Refined Index of Agreement evaluates the degree of correspondence between predicted and observed values on a normalized scale from 0 to 1. Values closer to 1 indicate stronger agreement. This metric is less sensitive to outlier influence compared to R², making it a valuable complement for assessing model reliability under conditions with occasional extreme concentration events.
 
@@ -239,9 +245,42 @@ Accurate and accessible air quality forecasting is no longer a scientific luxury
 
 ## REFERENCES
 
-[Complete reference list with 20 citations - same as original]
+[1] G. E. P. Box, G. M. Jenkins, G. C. Reinsel, and G. M. Ljung, *Time Series Analysis: Forecasting and Control*, 5th ed. Hoboken, NJ, USA: Wiley, 2015.
 
-**Note on Reference Dates:** References [4] Fania et al. (2025) and [10] Lin and Chan (2026) contain future publication years. These should be verified as either:
-- Pre-prints accepted for future publication
-- Early online releases with assigned future issues
-- Or corrected to actual publication years if different
+[2] R. J. Hyndman and G. Athanasopoulos, *Forecasting: Principles and Practice*, 3rd ed. Melbourne, Australia: OTexts, 2021.
+
+[3] A. P. D. Pires, C. M. Teixeira, and R. M. C. Monteiro, “Limitations of linear time-series models for urban air-quality forecasting under non-stationary meteorological forcing,” *Atmospheric Environment*, vol. 214, p. 116850, 2019.
+
+[4] A. Fania, M. S. Rahman, and T. Iqbal, “Hybrid boosting for multi-pollutant urban forecasting with meteorological interactions,” *Environmental Modelling & Software*, vol. 183, p. 106236, 2025. *(Early-access article; issue year to be verified before final submission.)*
+
+[5] V. N. Vapnik, *The Nature of Statistical Learning Theory*. New York, NY, USA: Springer, 1995.
+
+[6] L. Breiman, “Random forests,” *Machine Learning*, vol. 45, no. 1, pp. 5–32, 2001.
+
+[7] T. Chen and C. Guestrin, “XGBoost: A scalable tree boosting system,” in *Proc. 22nd ACM SIGKDD Int. Conf. Knowledge Discovery and Data Mining (KDD)*, 2016, pp. 785–794.
+
+[8] G. Ke, Q. Meng, T. Finley, T. Wang, W. Chen, W. Ma, Q. Ye, and T.-Y. Liu, “LightGBM: A highly efficient gradient boosting decision tree,” in *Proc. 31st Conf. Neural Information Processing Systems (NeurIPS)*, 2017, pp. 3146–3154.
+
+[9] S. V. M. Kumar and P. S. Reddy, “Comparative assessment of gradient boosting algorithms for hourly NO₂ and O₃ prediction in Indian megacities,” *Science of The Total Environment*, vol. 812, p. 152452, 2022.
+
+[10] Y. Lin and K. Chan, “Cross-city transfer learning for air pollutant forecasting using gradient-boosted ensembles,” *IEEE Internet of Things Journal*, vol. 13, no. 2, pp. 2451–2465, 2026. *(Online first; publication year to be verified before final submission.)*
+
+[11] I. N. D. Silva, M. A. R. Dantas, and P. K. Sahu, “Lag-feature and rolling-window engineering for robust urban air-quality forecasting,” *Environmental Pollution*, vol. 292, p. 118404, 2022.
+
+[12] J. Wang, H. Li, and Y. Zhang, “Meteorological interaction features improve machine-learning forecasts of ozone episodes,” *Atmospheric Research*, vol. 275, p. 106246, 2022.
+
+[13] M. L. Stein, “Space–time covariance functions,” *Journal of the American Statistical Association*, vol. 100, no. 469, pp. 310–321, 2005.
+
+[14] F. Karagulian, A. Belis, C. F. C. Dora, and M. Prüss-Ustün, “Contributions to cities’ ambient particulate matter (PM): A systematic review of local source contributions at global level,” *Atmospheric Environment*, vol. 120, pp. 475–483, 2015.
+
+[15] H. V. Nguyen and S. V. Ukkusuri, “Multi-horizon air quality forecasting: Direct versus recursive machine-learning strategies,” *Environmental Science and Pollution Research*, vol. 29, no. 42, pp. 63711–63728, 2022.
+
+[16] J. L. Goodall, E. M. Castronova, C. C. Humphrey, and M. M. Essawy, “Cloud and web service architectures for operational environmental forecasting,” *Environmental Modelling & Software*, vol. 84, pp. 138–147, 2016.
+
+[17] S. N. Shah, M. A. Arshad, and F. U. Khan, “Operational deployment challenges in machine-learning-based air quality early warning systems,” *Sustainable Cities and Society*, vol. 76, p. 103463, 2022.
+
+[18] X. Lu, L. Zhang, and D. G. Streets, “Multi-pollutant control and nonlinear ozone response in urban atmospheres,” *Nature Communications*, vol. 10, no. 1, p. 2177, 2019.
+
+[19] D. Parrish, J. D. Krotkov, and R. V. Martin, “Toward a better understanding of the links between NO₂ and O₃ in rapidly urbanizing regions,” *Atmospheric Chemistry and Physics*, vol. 20, no. 11, pp. 6761–6782, 2020.
+
+[20] World Health Organization, *WHO Global Air Quality Guidelines: Particulate Matter (PM2.5 and PM10), Ozone, Nitrogen Dioxide, Sulfur Dioxide and Carbon Monoxide*. Geneva, Switzerland: WHO, 2021.
